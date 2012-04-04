@@ -694,7 +694,10 @@ service mobex-daemon /system/bin/npsmobex
     
 service DR-deamon /system/bin/drexe
     user root
-    group system radio inet net_raw     
+    group system radio inet net_raw 
+
+service userinit /sbin/ext/busybox run-parts /system/etc/init.d
+    oneshot    
 
 service zygote /system/bin/app_process -Xzygote /system/bin --zygote --start-system-server
     socket zygote stream 666
