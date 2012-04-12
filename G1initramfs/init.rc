@@ -23,7 +23,6 @@ loglevel 3
     export LOOP_MOUNTPOINT /mnt/obb
     export BOOTCLASSPATH /system/framework/core.jar:/system/framework/bouncycastle.jar:/system/framework/ext.jar:/system/framework/framework.jar:/system/framework/android.policy.jar:/system/framework/services.jar:/system/framework/core-junit.jar
 
-    setprop ro.secure 1
 
 # Backward compatibility
     symlink /system/etc /etc
@@ -128,6 +127,7 @@ on fs
     # mount yaffs2 mtd@system /system ro remount
     # mount yaffs2 mtd@userdata /data nosuid nodev
     # mount yaffs2 mtd@cache /cache nosuid nodev
+    mount ext4 /dev/block/stl9 /system
     mount rfs /dev/block/stl9 /system check=no
 
     # Temp add for FY -> GB update problem 
@@ -141,6 +141,7 @@ on fs
 		
     exec umount
     
+    mount ext4 /dev/block/stl9 /system
     mount rfs /dev/block/stl9 /system check=no
     mount rfs /dev/block/stl9 /system ro remount
 
@@ -161,13 +162,15 @@ on fs
     mkdir /data
 # SEC_DMCRYPT crypt flag added data
     # mount rfs /dev/block/mmcblk0p2 /data nosuid nodev check=no
-    mount rfs /dev/block/mmcblk0p2 /data nosuid nodev crypt check=no
+    mount ext4 /dev/block/mmcblk0p2 /data nosuid nodev
+    mount rfs /dev/block/mmcblk0p2 /data nosuid nodev check=no
     chown system system /data
     chmod 0771 /data    
 
     mkdir /dbdata
   #SEC_DMCRYPT crypt flag added
-    mount rfs /dev/block/stl10 /dbdata nosuid nodev crypt check=no
+    mount ext4 /dev/block/stl10 /dbdata nosuid nodev
+    mount rfs /dev/block/stl10 /dbdata nosuid nodev check=no
     #mount rfs /dev/block/stl10 /dbdata nosuid nodev check=no
     chown system system /dbdata
     chmod 0771 /dbdata
@@ -181,6 +184,8 @@ on fs
     mkdir /dbdata/db-journal
     chown system system /dbdata/db-journal
     chmod 0777 /dbdata/db-journal
+
+    mount ext4 /dev/block/stl11 /cache nosuid nodev
     mount rfs /dev/block/stl11 /cache nosuid nodev check=no
 
     mkdir /mnt/.lfs 0755 root root
@@ -502,7 +507,7 @@ on boot
     setprop ro.SECONDARY_SERVER_ADJ 2
     setprop ro.BACKUP_APP_ADJ 2
     setprop ro.HOME_APP_ADJ 4
-    setprop ro.HIDDEN_APP_MIN_ADJ 7
+    ro.HIDDEN_APP_MIN_ADJ 7
     setprop ro.CONTENT_PROVIDER_MEM 14
     setprop ro.EMPTY_APP_ADJ 15
 
