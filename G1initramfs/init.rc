@@ -818,3 +818,5 @@ service gpsd /system/vendor/bin/gpsd -c /system/vendor/etc/gps.xml
     user gps
     group system inet
 
+on property:sys.boot_completed=1	
+    stop samsungani
