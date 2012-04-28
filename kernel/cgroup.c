@@ -122,7 +122,7 @@ struct cgroupfs_root {
      * Used to show coeherent informations in /proc/mounts without	
      * acquiring the cgroup_mutex lock.	
      */	
-+    rwlock_t lock;
+    rwlock_t lock;
 };
 
 /*
