@@ -1,11 +1,13 @@
 export CROSS_COMPILE=/home/balor/android/arm2009q3/bin/arm-none-eabi-
 INITRAMFS_DIR=G1initramfs
+INITRAMFS_ROOT_DIR=../initramfs_yp-g1
+
 echo "Cleaning directories"
 make ARCH=arm distclean
 rm -rf $INITRAMFS_DIR/*
 
 echo "Copy default initramfs"
-cp -R initramfs_root/* $INITRAMFS_DIR/
+cp -R $INITRAMFS_ROOT_DIR/* $INITRAMFS_DIR/
 echo "Copy configuration"
 make $1
 
