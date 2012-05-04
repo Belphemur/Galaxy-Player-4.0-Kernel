@@ -36,7 +36,12 @@
 #include <linux/sched.h>
 #include <linux/notifier.h>
 
-#define SEC_ADJUST_LMK
+#ifdef CONFIG_SWAP
+#include <linux/fs.h>
+#include <linux/swap.h>
+#endif
+
+#define DEBUG_LEVEL_DEATHPENDING 6
 
 static uint32_t lowmem_debug_level = 2;
 static int lowmem_adj[6] = {
@@ -54,13 +59,29 @@ static size_t lowmem_minfree[6] = {
 };
 static int lowmem_minfree_size = 4;
 
+static size_t lowmem_minfile[6] = {
+	1536,
+	2048,
+	4096,
+	5120,
+	5632,
+	6144
+};
+static int lowmem_minfile_size = 6;
+
 static struct task_struct *lowmem_deathpending;
 static unsigned long lowmem_deathpending_timeout;
+static uint32_t lowmem_check_filepages = 0;
+#ifdef CONFIG_SWAP
+static int fudgeswap = 512;
+#endif
 
 #define lowmem_print(level, x...)			\
 	do {						\
-		if (lowmem_debug_level >= (level))	\
+		if (lowmem_debug_level >= (level)) {	\
+			printk("lowmem: ");		\
 			printk(x);			\
+		}					\
 	} while (0)
 
 static int
@@ -75,10 +96,49 @@ task_notify_func(struct notifier_block *self, unsigned long val, void *data)
 {
 	struct task_struct *task = data;
 
-	if (task == lowmem_deathpending)
+	if (task == lowmem_deathpending) {
 		lowmem_deathpending = NULL;
+		lowmem_print(2, "deathpending end %d (%s)\n",
+			task->pid, task->comm);
+	}
 
 	return NOTIFY_OK;
+}
+
+static void dump_deathpending(struct task_struct *t_deathpending)
+{
+	struct task_struct *p;
+
+	if (lowmem_debug_level < DEBUG_LEVEL_DEATHPENDING)
+		return;
+
+	BUG_ON(!t_deathpending);
+	lowmem_print(DEBUG_LEVEL_DEATHPENDING, "deathpending %d (%s)\n",
+		t_deathpending->pid, t_deathpending->comm);
+
+	read_lock(&tasklist_lock);
+	for_each_process(p) {
+		struct mm_struct *mm;
+		struct signal_struct *sig;
+		int oom_adj;
+		int tasksize;
+
+		task_lock(p);
+		mm = p->mm;
+		sig = p->signal;
+		if (!mm || !sig) {
+			task_unlock(p);
+			continue;
+		}
+		oom_adj = sig->oom_adj;
+		tasksize = get_mm_rss(mm);
+		task_unlock(p);
+		lowmem_print(DEBUG_LEVEL_DEATHPENDING,
+			"  %d (%s), adj %d, size %d\n",
+			p->pid, p->comm,
+			oom_adj, tasksize);
+	}
+	read_unlock(&tasklist_lock);
 }
 
 static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
@@ -93,13 +153,10 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 	int selected_oom_adj;
 	int array_size = ARRAY_SIZE(lowmem_adj);
 	int other_free = global_page_state(NR_FREE_PAGES);
-#ifdef SEC_ADJUST_LMK
-	int other_file = global_page_state(NR_INACTIVE_FILE) +
-						global_page_state(NR_ACTIVE_FILE);
-#else
 	int other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM);
-#endif
+	int lru_file = global_page_state(NR_ACTIVE_FILE) +
+			global_page_state(NR_INACTIVE_FILE);
 
 	/*
 	 * If we already have a death outstanding, then
@@ -109,29 +166,40 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 	 *
 	 */
 	if (lowmem_deathpending &&
-	    time_before_eq(jiffies, lowmem_deathpending_timeout))
+	    time_before_eq(jiffies, lowmem_deathpending_timeout)) {
+		dump_deathpending(lowmem_deathpending);
 		return 0;
+	}
+
+#ifdef CONFIG_SWAP
+	if(fudgeswap != 0){
+		struct sysinfo si;
+		si_swapinfo(&si);
+
+		if(si.freeswap > 0){
+			if(fudgeswap > si.freeswap)
+				other_file += si.freeswap;
+			else
+				other_file += fudgeswap;
+		}
+	}
+#endif
 
 	if (lowmem_adj_size < array_size)
 		array_size = lowmem_adj_size;
 	if (lowmem_minfree_size < array_size)
 		array_size = lowmem_minfree_size;
 	for (i = 0; i < array_size; i++) {
-#ifdef SEC_ADJUST_LMK
-		if ((other_free + other_file) < lowmem_minfree[i])
-#else
-		if (other_free < lowmem_minfree[i] &&
-		    other_file < lowmem_minfree[i])
-#endif
-		{
-			min_adj = lowmem_adj[i];
-			break;
+		if (other_free < lowmem_minfree[i]) {
+			if (other_file < lowmem_minfree[i] ||
+				(lowmem_check_filepages &&
+				(lru_file < lowmem_minfile[i]))) {
+
+				min_adj = lowmem_adj[i];
+				break;
+			}
 		}
 	}
-#ifdef SEC_ADJUST_LMK
-	if (min_adj == OOM_ADJUST_MAX + 1)
-		return 0;
-#endif
 	if (nr_to_scan > 0)
 		lowmem_print(3, "lowmem_shrink %d, %x, ofree %d %d, ma %d\n",
 			     nr_to_scan, gfp_mask, other_free, other_file,
@@ -140,12 +208,7 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 		global_page_state(NR_ACTIVE_FILE) +
 		global_page_state(NR_INACTIVE_ANON) +
 		global_page_state(NR_INACTIVE_FILE);
-#ifdef SEC_ADJUST_LMK
-	if (nr_to_scan <= 0)
-#else
-	if (nr_to_scan <= 0 || min_adj == OOM_ADJUST_MAX + 1)
-#endif
-	{
+	if (nr_to_scan <= 0 || min_adj == OOM_ADJUST_MAX + 1) {
 		lowmem_print(5, "lowmem_shrink %d, %x, return %d\n",
 			     nr_to_scan, gfp_mask, rem);
 		return rem;
@@ -196,10 +259,6 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 		force_sig(SIGKILL, selected);
 		rem -= selected_tasksize;
 	}
-#ifdef SEC_ADJUST_LMK
-	else
-		rem = -1;
-#endif
 	lowmem_print(4, "lowmem_shrink %d, %x, return %d\n",
 		     nr_to_scan, gfp_mask, rem);
 	read_unlock(&tasklist_lock);
@@ -225,9 +284,20 @@ static void __exit lowmem_exit(void)
 }
 
 module_param_named(cost, lowmem_shrinker.seeks, int, S_IRUGO | S_IWUSR);
-module_param_array_named(adj, lowmem_adj, int, &lowmem_adj_size, S_IRUGO | S_IWUSR);	
-module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size, S_IRUGO | S_IWUSR);
+module_param_array_named(adj, lowmem_adj, int, &lowmem_adj_size,
+			 S_IRUGO | S_IWUSR);
+module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,
+			 S_IRUGO | S_IWUSR);
 module_param_named(debug_level, lowmem_debug_level, uint, S_IRUGO | S_IWUSR);
+
+module_param_named(check_filepages , lowmem_check_filepages, uint,
+		   S_IRUGO | S_IWUSR);
+module_param_array_named(minfile, lowmem_minfile, uint, &lowmem_minfile_size,
+			 S_IRUGO | S_IWUSR);
+
+#ifdef CONFIG_SWAP
+module_param_named(fudgeswap, fudgeswap, int, S_IRUGO | S_IWUSR);
+#endif
 
 module_init(lowmem_init);
 module_exit(lowmem_exit);
