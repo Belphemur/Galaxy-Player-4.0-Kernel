@@ -9,5 +9,5 @@ find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec echo {} \;
 find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec cp {} $INITRAMFS_DIR/lib/modules/  \;
 make -j5
 cp arch/arm/boot/zImage .
-tar cvf kernel.tar.gz zImage
+tar cvf kernel.tar zImage
 rm zImage
