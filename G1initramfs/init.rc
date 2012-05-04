@@ -627,6 +627,18 @@ on property:persist.service.usb.setting=4
 # adbd is controlled by the persist.service.adb.enable system property
 service adbd /sbin/adbd
     disabled
+######################
+# LOGGING ADD //Balor#
+######################
+
+#Kernel log
+service klog /system/bin/dd if=/proc/kmsg of=/kernel.log bs=1
+   oneshot
+
+#Android log
+service logcat /system/bin/logcat -r 10000 -f /log.txt
+   oneshot
+   user root
 
 # adbd on at boot in emulator
 on property:ro.kernel.qemu=1
