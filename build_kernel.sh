@@ -1,15 +1,18 @@
 export CROSS_COMPILE=/home/balor/android/arm2009q3/bin/arm-none-eabi-
 INITRAMFS_DIR=G1initramfs
 INITRAMFS_ROOT_DIR=../initramfs_yp-g1
+KERNEL_NAME=TerraSilent
+KERNEL_VNUMBER=1.0
 
 # DO NOT MODIFY BELOW THIS LINE
+CURRENT_DIR=`pwd`
 if [[ -z $1 ]]
 then
 	echo "No configuration file defined"
 	exit 1
 	
 else 
-	if [[ ! -e "arch/arm/configs/$1" ]]
+	if [[ ! -e "${CURRENT_DIR}/arch/arm/configs/$1" ]]
 	then
 		echo "Configuration file $1 don't exists"
 		exit 1
@@ -31,10 +34,10 @@ if [[ "$CONFIG" == *usa* ]]
 then
 	VERSION="usa"
 fi
-export KBUILD_BUILD_VERSION="TerraSilent_$VERSION"
+export KBUILD_BUILD_VERSION="${KERNEL_NAME}_${VERSION}-${KERNEL_VNUMBER}"
 export LOCALVERSION="-G1XXKPN-CL562447"
 
-echo "Build kernel $KBUILD_BUILD_VERSION $LOCALVERSION with configuration $1"
+echo "Build kernel ${KBUILD_BUILD_VERSION}${LOCALVERSION} with configuration $CONFIG"
 make ARCH=arm -j5
 echo "Copy modules :"
 find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec echo {} \;
@@ -42,6 +45,5 @@ find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec cp {} $INITRAMFS_DIR/lib/mo
 
 echo "Rebuild with modules"
 make ARCH=arm -j5
-cp arch/arm/boot/zImage .
-tar cvf kernel.tar zImage
-rm zImage
+tar cvf "${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar" "${CURRENT_DIR}/arch/arm/boot/zImage"
+echo "Tar created : ${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar"
