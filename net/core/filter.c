@@ -286,9 +286,7 @@ load_b:
 			mem[fentry->k] = X;
 			continue;
 		default:
-			WARN_RATELIMIT(1, "Unknown code:%u jt:%u tf:%u k:%u\n",
-				       fentry->code, fentry->jt,
-				       fentry->jf, fentry->k);
+			WARN_ON(1);
 			return 0;
 		}
 

@@ -237,7 +237,7 @@ static int menu_select(struct cpuidle_device *dev)
 	unsigned int power_usage = -1;
 	int i;
 	int multiplier;
-    struct timespec t;
+        struct timespec t;
 
 	if (data->needs_update) {
 		menu_update(dev);
@@ -252,7 +252,7 @@ static int menu_select(struct cpuidle_device *dev)
 		return 0;
 
 	/* determine the expected residency time, round up */
-    t = ktime_to_timespec(tick_nohz_get_sleep_length());
+        t = ktime_to_timespec(tick_nohz_get_sleep_length());
 	data->expected_us =
 	    t.tv_sec * USEC_PER_SEC + t.tv_nsec / NSEC_PER_USEC;
 
