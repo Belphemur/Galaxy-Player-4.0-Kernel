@@ -2,6 +2,23 @@ export CROSS_COMPILE=/home/balor/android/arm2009q3/bin/arm-none-eabi-
 INITRAMFS_DIR=G1initramfs
 INITRAMFS_ROOT_DIR=../initramfs_yp-g1
 
+# DO NOT MODIFY BELOW THIS LINE
+if [[ -z $1 ]]
+then
+	echo "No configuration file defined"
+	exit 1
+	
+else 
+	if [[ ! -e "arch/arm/configs/$1" ]]
+	then
+		echo "Configuration file $1 don't exists"
+		exit 1
+	fi
+	CONFIG=$1
+fi
+
+
+VERSION="intl"
 echo "Cleaning directories"
 make ARCH=arm distclean
 rm -rf $INITRAMFS_DIR/*
@@ -9,9 +26,12 @@ rm -rf $INITRAMFS_DIR/*
 echo "Copy default initramfs"
 cp -R $INITRAMFS_ROOT_DIR/* $INITRAMFS_DIR/
 echo "Copy configuration"
-make $1
-
-export KBUILD_BUILD_VERSION="balor_Beta_INTL"
+make $CONFIG
+if [[ "$CONFIG" == *usa* ]]
+then
+	VERSION="usa"
+fi
+export KBUILD_BUILD_VERSION="TerraSilent_$VERSION"
 export LOCALVERSION="-G1XXKPN-CL562447"
 
 echo "Build kernel $KBUILD_BUILD_VERSION $LOCALVERSION with configuration $1"
