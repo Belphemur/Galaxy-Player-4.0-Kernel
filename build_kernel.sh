@@ -45,5 +45,7 @@ find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec cp {} $INITRAMFS_DIR/lib/mo
 
 echo "Rebuild with modules"
 make ARCH=arm -j5
-tar cvf "${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar" "${CURRENT_DIR}/arch/arm/boot/zImage"
+cp "${CURRENT_DIR}/arch/arm/boot/zImage" .
+tar cvf "${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar" zImage
+rm zImage
 echo "Tar created : ${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar"
