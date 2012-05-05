@@ -6,6 +6,8 @@ KERNEL_VNUMBER=1.0
 
 # DO NOT MODIFY BELOW THIS LINE
 CURRENT_DIR=`pwd`
+NB_CPU=`grep processor /proc/cpuinfo | wc -l`
+let NB_CPU+=1
 if [[ -z $1 ]]
 then
 	echo "No configuration file defined"
@@ -38,13 +40,13 @@ export KBUILD_BUILD_VERSION="${KERNEL_NAME}_${VERSION}-${KERNEL_VNUMBER}"
 export LOCALVERSION="-G1XXKPN-CL562447"
 
 echo "Build kernel ${KBUILD_BUILD_VERSION}${LOCALVERSION} with configuration $CONFIG"
-make ARCH=arm -j5
+make ARCH=arm -j$NB_CPU
 echo "Copy modules :"
 find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec echo {} \;
 find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec cp {} $INITRAMFS_DIR/lib/modules/  \;
 
 echo "Rebuild with modules"
-make ARCH=arm -j5
+make ARCH=arm -j$NB_CPU
 cp "${CURRENT_DIR}/arch/arm/boot/zImage" .
 tar cvf "${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar" zImage
 rm zImage
