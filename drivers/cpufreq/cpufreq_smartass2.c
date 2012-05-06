@@ -373,6 +373,7 @@ static void cpufreq_idle(void)
 /* We use the same work function to sale up and down */
 static void cpufreq_smartass_freq_change_time_work(struct work_struct *work)
 {
+
 	unsigned int cpu;
 	int new_freq;
 	int old_freq;
@@ -384,7 +385,12 @@ static void cpufreq_smartass_freq_change_time_work(struct work_struct *work)
 		this_smartass = &per_cpu(smartass_info, cpu);
 		if (!work_cpumask_test_and_clear(cpu))
 			continue;
-
+		if(suspended)
+		{
+			this_smartass->freq_change_time_in_idle =
+					get_cpu_idle_time_us(cpu,&this_smartass->freq_change_time);
+			continue;
+		}
 		ramp_dir = this_smartass->ramp_dir;
 		this_smartass->ramp_dir = 0;
 
@@ -764,6 +770,12 @@ static void smartass_suspend(int cpu, int suspend)
 
 		this_smartass->freq_change_time_in_idle =
 			get_cpu_idle_time_us(cpu,&this_smartass->freq_change_time);
+			
+		//Change by Balor
+		//We set the idle frequency after checking it, and then we'll disable the timer
+		new_freq = validate_freq(policy,sleep_ideal_freq);
+		__cpufreq_driver_target(policy, new_freq,
+					CPUFREQ_RELATION_L);
 
 		dprintk(SMARTASS_DEBUG_JUMPS,"SmartassS: suspending at %d\n",policy->cur);
 	}
@@ -792,9 +804,7 @@ static void smartass_late_resume(struct early_suspend *handler) {
 static struct early_suspend smartass_power_suspend = {
 	.suspend = smartass_early_suspend,
 	.resume = smartass_late_resume,
-#ifdef CONFIG_MACH_HERO
 	.level = EARLY_SUSPEND_LEVEL_DISABLE_FB + 1,
-#endif
 };
 
 static int __init cpufreq_smartass_init(void)
