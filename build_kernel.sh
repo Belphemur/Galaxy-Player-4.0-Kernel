@@ -2,7 +2,7 @@ export CROSS_COMPILE=/home/balor/android/arm2009q3/bin/arm-none-eabi-
 INITRAMFS_DIR=G1initramfs
 INITRAMFS_ROOT_DIR=../initramfs_yp-g1
 KERNEL_NAME=TerraSilent
-KERNEL_VNUMBER=1.0
+KERNEL_VNUMBER=1.1
 
 # DO NOT MODIFY BELOW THIS LINE
 CURRENT_DIR=`pwd`
@@ -48,6 +48,12 @@ find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec cp {} $INITRAMFS_DIR/lib/mo
 echo "Rebuild with modules"
 make ARCH=arm -j$NB_CPU
 cp "${CURRENT_DIR}/arch/arm/boot/zImage" .
-tar cvf "${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar" zImage
+TARFILE="${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar"
+if [[ -e $TARFILE ]]
+then
+	echo "Moving old tar file to ${TARFILE}.old"
+	mv -f $TARFILE "${TARFILE}.old"
+fi
+tar cvf $TARFILE zImage
 rm zImage
 echo "Tar created : ${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar"
