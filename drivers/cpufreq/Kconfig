@@ -154,6 +154,12 @@ config CPU_FREQ_DEFAULT_GOV_SMARTASS2
 	select CPU_FREQ_GOV_SMARTASS2
 	help
 	  Use the CPUFreq governor 'smartassV2' as default.
+	  
+config CPU_FREQ_DEFAULT_GOV_TERRASILENT
+	bool "terrasilent"
+	select CPU_FREQ_GOV_TERRASILENT
+	help
+	  Use the CPUFreq governor 'terrasilent' as default.
 
 endchoice
 
@@ -282,6 +288,19 @@ config CPU_FREQ_GOV_SMARTASS2
 	depends on CPU_FREQ
 	help
 	  'smartassV2' - a "smart" optimized governor for the hero!
+	  If in doubt, say N.
+config CPU_FREQ_GOV_TERRASILENT
+	tristate "'TerraSilent' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  'TerraSilent' - a "smart" optimized governor based on SmartAss2
+	  If in doubt, say N.
+config CPU_FREQ_GOV_TERRASILENT_DEBUG
+	boolean "'TerraSilent' DebugLog"
+	depends on CPU_FREQ_GOV_TERRASILENT
+	default n
+	help
+	  Activate the 'TerraSilent' debugLog
 	  If in doubt, say N.
 
 endif	# CPU_FREQ
