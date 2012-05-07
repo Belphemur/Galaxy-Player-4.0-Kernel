@@ -12,14 +12,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * Author: Erasmux
+ * Author: Balor (aka Antoine Aflalo)
  * 
+ * Based on SmartAssV2 by Erasmux that was
  * Based on the interactive governor By Mike Chan (mike@android.com)
  * which was adaptated to 2.6.29 kernel by Nadlabak (pavel@doshaska.net)
  * 
  *
  * SMP support based on mod by faux123
- * Tweaked, Modded and Renamed to TerraSilent by Balor (aka Antoine Aflalo)
  *
  * For a general overview of TerraSilent see the relavent part in
  * Documentation/cpu-freq/governors.txt
@@ -36,7 +36,6 @@
 #include <linux/moduleparam.h>
 #include <asm/cputime.h>
 #include <linux/earlysuspend.h>
-
 
 /******************** Tunable parameters: ********************/
 
@@ -70,13 +69,13 @@ static unsigned int ramp_up_step;
  * Zero disables and will calculate ramp down according to load heuristic.
  * When above the ideal freqeuncy we always ramp down to the ideal freq.
  */
-#define DEFAULT_RAMP_DOWN_STEP 200000
+#define DEFAULT_RAMP_DOWN_STEP 0
 static unsigned int ramp_down_step;
 
 /*
  * CPU freq will be increased if measured load > max_cpu_load;
  */
-#define DEFAULT_MAX_CPU_LOAD 65
+#define DEFAULT_MAX_CPU_LOAD 75
 static unsigned long max_cpu_load;
 
 /*
@@ -89,14 +88,14 @@ static unsigned long min_cpu_load;
  * The minimum amount of time to spend at a frequency before we can ramp up.
  * Notice we ignore this when we are below the ideal frequency.
  */
-#define DEFAULT_UP_RATE_US 55000;
+#define DEFAULT_UP_RATE_US 60000;
 static unsigned long up_rate_us;
 
 /*
  * The minimum amount of time to spend at a frequency before we can ramp down.
  * Notice we ignore this when we are above the ideal frequency.
  */
-#define DEFAULT_DOWN_RATE_US 65000;
+#define DEFAULT_DOWN_RATE_US 30000;
 static unsigned long down_rate_us;
 
 /*
@@ -112,13 +111,10 @@ static unsigned int sleep_wakeup_freq;
 #define DEFAULT_SAMPLE_RATE_JIFFIES 2
 static unsigned int sample_rate_jiffies;
 
-
 /*************** End of tunables ***************/
-
 
 static void (*pm_idle_old)(void);
 static atomic_t active_count = ATOMIC_INIT(0);
-
 struct terrasilent_cpu_info {
 	struct cpufreq_policy *cur_policy;
 	struct cpufreq_frequency_table *freq_table;
@@ -127,11 +123,10 @@ struct terrasilent_cpu_info {
 	u64 idle_exit_time;
 	u64 freq_change_time;
 	u64 freq_change_time_in_idle;
-	int cur_cpu_load;
-	int old_freq;
+	unsigned int cur_cpu_load;
+	unsigned int old_freq;
 	int ramp_dir;
 	unsigned int enable;
-	int ideal_speed;
 };
 static DEFINE_PER_CPU(struct terrasilent_cpu_info, terrasilent_info);
 
@@ -150,9 +145,9 @@ static unsigned int suspended;
 	} while (0)
 
 enum {
-	TERRASILENT_DEBUG_JUMPS=1,
-	TERRASILENT_DEBUG_LOAD=2,
-	TERRASILENT_DEBUG_ALG=4
+	TERRASILENT_DEBUG_JUMPS = 1,
+	TERRASILENT_DEBUG_LOAD = 2,
+	TERRASILENT_DEBUG_ALG = 4
 };
 
 /*
@@ -167,34 +162,13 @@ static int cpufreq_governor_terrasilent(struct cpufreq_policy *policy,
 static
 #endif
 struct cpufreq_governor cpufreq_gov_terrasilent = {
-	.name = "terrasilent",
-	.governor = cpufreq_governor_terrasilent,
-	.max_transition_latency = 9000000,
-	.owner = THIS_MODULE,
-};
+		.name = "TerraSilent",
+		.governor = cpufreq_governor_terrasilent,
+		.max_transition_latency = 9000000,
+		.owner = THIS_MODULE, };
 
-inline static void terrasilent_update_min_max(struct terrasilent_cpu_info *this_terrasilent, struct cpufreq_policy *policy, int suspend) {
-	if (suspend) {
-		this_terrasilent->ideal_speed = // sleep_ideal_freq; but make sure it obeys the policy min/max
-			policy->max > sleep_ideal_freq ?
-			(sleep_ideal_freq > policy->min ? sleep_ideal_freq : policy->min) : policy->max;
-	} else {
-		this_terrasilent->ideal_speed = // awake_ideal_freq; but make sure it obeys the policy min/max
-			policy->min < awake_ideal_freq ?
-			(awake_ideal_freq < policy->max ? awake_ideal_freq : policy->max) : policy->min;
-	}
-}
-
-inline static void terrasilent_update_min_max_allcpus(void) {
-	unsigned int i;
-	for_each_online_cpu(i) {
-		struct terrasilent_cpu_info *this_terrasilent = &per_cpu(terrasilent_info, i);
-		if (this_terrasilent->enable)
-			terrasilent_update_min_max(this_terrasilent,this_terrasilent->cur_policy,suspended);
-	}
-}
-
-inline static unsigned int validate_freq(struct cpufreq_policy *policy, int freq) {
+inline static unsigned int validate_freq(struct cpufreq_policy *policy,
+		int freq) {
 	if (freq > (int)policy->max)
 		return policy->max;
 	if (freq < (int)policy->min)
@@ -202,8 +176,10 @@ inline static unsigned int validate_freq(struct cpufreq_policy *policy, int freq
 	return freq;
 }
 
-inline static void reset_timer(unsigned long cpu, struct terrasilent_cpu_info *this_terrasilent) {
-	this_terrasilent->time_in_idle = get_cpu_idle_time_us(cpu, &this_terrasilent->idle_exit_time);
+inline static void reset_timer(unsigned long cpu,
+		struct terrasilent_cpu_info *this_terrasilent) {
+	this_terrasilent->time_in_idle = get_cpu_idle_time_us(cpu,
+			&this_terrasilent->idle_exit_time);
 	mod_timer(&this_terrasilent->timer, jiffies + sample_rate_jiffies);
 }
 
@@ -223,33 +199,35 @@ inline static int work_cpumask_test_and_clear(unsigned long cpu) {
 	return res;
 }
 
-inline static int target_freq(struct cpufreq_policy *policy, struct terrasilent_cpu_info *this_terrasilent,
-			      int new_freq, int old_freq, int prefered_relation) {
+inline static int target_freq(struct cpufreq_policy *policy,
+		struct terrasilent_cpu_info *this_terrasilent, int new_freq,
+		int old_freq, int prefered_relation) {
 	int index, target;
 	struct cpufreq_frequency_table *table = this_terrasilent->freq_table;
 
 	if (new_freq == old_freq)
 		return 0;
-	new_freq = validate_freq(policy,new_freq);
+	new_freq = validate_freq(policy, new_freq);
 	if (new_freq == old_freq)
 		return 0;
 
-	if (table &&
-	    !cpufreq_frequency_table_target(policy,table,new_freq,prefered_relation,&index))
-	{
+	if (table
+			&& !cpufreq_frequency_table_target(policy, table, new_freq,
+					prefered_relation, &index)) {
 		target = table[index].frequency;
 		if (target == old_freq) {
 			// if for example we are ramping up to *at most* current + ramp_up_step
 			// but there is no such frequency higher than the current, try also
 			// to ramp up to *at least* current + ramp_up_step.
-			if (new_freq > old_freq && prefered_relation==CPUFREQ_RELATION_H
-			    && !cpufreq_frequency_table_target(policy,table,new_freq,
-							       CPUFREQ_RELATION_L,&index))
+			if (new_freq > old_freq && prefered_relation == CPUFREQ_RELATION_H
+					&& !cpufreq_frequency_table_target(policy, table, new_freq,
+							CPUFREQ_RELATION_L, &index))
 				target = table[index].frequency;
 			// simlarly for ramping down:
-			else if (new_freq < old_freq && prefered_relation==CPUFREQ_RELATION_L
-				&& !cpufreq_frequency_table_target(policy,table,new_freq,
-								   CPUFREQ_RELATION_H,&index))
+			else if (new_freq < old_freq
+					&& prefered_relation == CPUFREQ_RELATION_L
+					&& !cpufreq_frequency_table_target(policy, table, new_freq,
+							CPUFREQ_RELATION_H, &index))
 				target = table[index].frequency;
 		}
 
@@ -258,22 +236,21 @@ inline static int target_freq(struct cpufreq_policy *policy, struct terrasilent_
 			// If we got here we tried to change to a validated new_freq which is different
 			// from old_freq, so there is no reason for us to remain at same frequency.
 			printk(KERN_WARNING "terrasilent: frequency change failed: %d to %d => %d\n",
-			       old_freq,new_freq,target);
+					old_freq,new_freq,target);
 			return 0;
 		}
-	}
-	else target = new_freq;
+	} else
+		target = new_freq;
 
 	__cpufreq_driver_target(policy, target, prefered_relation);
 
-	dprintk(TERRASILENT_DEBUG_JUMPS,"terrasilentQ: jumping from %d to %d => %d (%d)\n",
-		old_freq,new_freq,target,policy->cur);
+	dprintk(TERRASILENT_DEBUG_JUMPS,
+			"terrasilentQ: jumping from %d to %d => %d (%d)\n", old_freq, new_freq, target, policy->cur);
 
 	return target;
 }
 
-static void cpufreq_terrasilent_timer(unsigned long cpu)
-{
+static void cpufreq_terrasilent_timer(unsigned long cpu) {
 	u64 delta_idle;
 	u64 delta_time;
 	int cpu_load;
@@ -281,13 +258,15 @@ static void cpufreq_terrasilent_timer(unsigned long cpu)
 	u64 update_time;
 	u64 now_idle;
 	int queued_work = 0;
-	struct terrasilent_cpu_info *this_terrasilent = &per_cpu(terrasilent_info, cpu);
+	struct terrasilent_cpu_info *this_terrasilent =
+			&per_cpu(terrasilent_info, cpu);
 	struct cpufreq_policy *policy = this_terrasilent->cur_policy;
 
 	now_idle = get_cpu_idle_time_us(cpu, &update_time);
 	old_freq = policy->cur;
 
-	if (this_terrasilent->idle_exit_time == 0 || update_time == this_terrasilent->idle_exit_time)
+	if (this_terrasilent->idle_exit_time == 0
+			|| update_time == this_terrasilent->idle_exit_time)
 		return;
 
 	delta_idle = cputime64_sub(now_idle, this_terrasilent->time_in_idle);
@@ -296,17 +275,18 @@ static void cpufreq_terrasilent_timer(unsigned long cpu)
 	// If timer ran less than 1ms after short-term sample started, retry.
 	if (delta_time < 1000) {
 		if (!timer_pending(&this_terrasilent->timer))
-			reset_timer(cpu,this_terrasilent);
+			reset_timer(cpu, this_terrasilent);
 		return;
 	}
 
 	if (delta_idle > delta_time)
 		cpu_load = 0;
 	else
-		cpu_load = 100 * (unsigned int)(delta_time - delta_idle) / (unsigned int)delta_time;
+		cpu_load = 100 * (unsigned int) (delta_time - delta_idle)
+				/ (unsigned int) delta_time;
 
-	dprintk(TERRASILENT_DEBUG_LOAD,"terrasilentT @ %d: load %d (delta_time %llu)\n",
-		old_freq,cpu_load,delta_time);
+	dprintk(TERRASILENT_DEBUG_LOAD,
+			"terrasilentT @ %d: load %d (delta_time %llu)\n", old_freq, cpu_load, delta_time);
 
 	this_terrasilent->cur_cpu_load = cpu_load;
 	this_terrasilent->old_freq = old_freq;
@@ -314,35 +294,34 @@ static void cpufreq_terrasilent_timer(unsigned long cpu)
 	// Scale up if load is above max or if there where no idle cycles since coming out of idle,
 	// additionally, if we are at or above the ideal_speed, verify we have been at this frequency
 	// for at least up_rate_us:
-	if (cpu_load > max_cpu_load || delta_idle == 0)
-	{
-		if (old_freq < policy->max &&
-			 (old_freq < this_terrasilent->ideal_speed || delta_idle == 0 ||
-			  cputime64_sub(update_time, this_terrasilent->freq_change_time) >= up_rate_us))
-		{
-			dprintk(TERRASILENT_DEBUG_ALG,"terrasilentT @ %d ramp up: load %d (delta_idle %llu)\n",
-				old_freq,cpu_load,delta_idle);
+	if (cpu_load > max_cpu_load || delta_idle == 0) {
+		if (old_freq < policy->max
+				&& (old_freq < awake_ideal_freq || delta_idle == 0
+						|| cputime64_sub(update_time, this_terrasilent->freq_change_time)
+								>= up_rate_us)) {
+			dprintk(TERRASILENT_DEBUG_ALG,
+					"terrasilentT @ %d ramp up: load %d (delta_idle %llu)\n", old_freq, cpu_load, delta_idle);
 			this_terrasilent->ramp_dir = 1;
 			work_cpumask_set(cpu);
 			queue_work(up_wq, &freq_scale_work);
 			queued_work = 1;
-		}
-		else this_terrasilent->ramp_dir = 0;
+		} else
+			this_terrasilent->ramp_dir = 0;
 	}
 	// Similarly for scale down: load should be below min and if we are at or below ideal
 	// frequency we require that we have been at this frequency for at least down_rate_us:
-	else if (cpu_load < min_cpu_load && old_freq > policy->min &&
-		 (old_freq > this_terrasilent->ideal_speed ||
-		  cputime64_sub(update_time, this_terrasilent->freq_change_time) >= down_rate_us))
-	{
-		dprintk(TERRASILENT_DEBUG_ALG,"terrasilentT @ %d ramp down: load %d (delta_idle %llu)\n",
-			old_freq,cpu_load,delta_idle);
+	else if (cpu_load < min_cpu_load && old_freq > policy->min
+			&& (old_freq > awake_ideal_freq
+					|| cputime64_sub(update_time, this_terrasilent->freq_change_time)
+							>= down_rate_us)) {
+		dprintk(TERRASILENT_DEBUG_ALG,
+				"terrasilentT @ %d ramp down: load %d (delta_idle %llu)\n", old_freq, cpu_load, delta_idle);
 		this_terrasilent->ramp_dir = -1;
 		work_cpumask_set(cpu);
 		queue_work(down_wq, &freq_scale_work);
 		queued_work = 1;
-	}
-	else this_terrasilent->ramp_dir = 0;
+	} else
+		this_terrasilent->ramp_dir = 0;
 
 	// To avoid unnecessary load when the CPU is already at high load, we don't
 	// reset ourselves if we are at max speed. If and when there are idle cycles,
@@ -350,12 +329,12 @@ static void cpufreq_terrasilent_timer(unsigned long cpu)
 	// Additionally, if we queued some work, the work task will reset the timer
 	// after it has done its adjustments.
 	if (!queued_work && old_freq < policy->max)
-		reset_timer(cpu,this_terrasilent);
+		reset_timer(cpu, this_terrasilent);
 }
 
-static void cpufreq_idle(void)
-{
-	struct terrasilent_cpu_info *this_terrasilent = &per_cpu(terrasilent_info, smp_processor_id());
+static void cpufreq_idle(void) {
+	struct terrasilent_cpu_info *this_terrasilent =
+			&per_cpu(terrasilent_info, smp_processor_id());
 	struct cpufreq_policy *policy = this_terrasilent->cur_policy;
 
 	if (!this_terrasilent->enable) {
@@ -371,10 +350,34 @@ static void cpufreq_idle(void)
 	if (!timer_pending(&this_terrasilent->timer))
 		reset_timer(smp_processor_id(), this_terrasilent);
 }
+/*
+ * Choose the cpu frequency based off the load. For now choose the minimum
+ * frequency that will satisfy the load, which is not always the lower power.
+ */
+static unsigned int cpufreq_terrasilent_calc_freq(unsigned int cpu) {
+	unsigned int delta_time;
+	unsigned int idle_time;
+	unsigned int cpu_load;
+	u64 current_wall_time;
+	u64 current_idle_time;
+	struct terrasilent_cpu_info *this_terrasilent;
+	struct cpufreq_policy *policy;
 
+	this_terrasilent = &per_cpu(terrasilent_info, cpu);
+	policy = this_terrasilent->cur_policy;
+
+	current_idle_time = get_cpu_idle_time_us(cpu, &current_wall_time);
+
+	idle_time = (unsigned int) current_idle_time
+			- this_terrasilent->freq_change_time_in_idle;
+	delta_time = (unsigned int) current_wall_time
+			- this_terrasilent->freq_change_time;
+
+	cpu_load = 100 * (delta_time - idle_time) / delta_time;
+	return policy->cur * cpu_load / max_cpu_load;
+}
 /* We use the same work function to sale up and down */
-static void cpufreq_terrasilent_freq_change_time_work(struct work_struct *work)
-{
+static void cpufreq_terrasilent_freq_change_time_work(struct work_struct *work) {
 
 	unsigned int cpu;
 	int new_freq;
@@ -387,10 +390,9 @@ static void cpufreq_terrasilent_freq_change_time_work(struct work_struct *work)
 		this_terrasilent = &per_cpu(terrasilent_info, cpu);
 		if (!work_cpumask_test_and_clear(cpu))
 			continue;
-		if(suspended)
-		{
-			this_terrasilent->freq_change_time_in_idle =
-					get_cpu_idle_time_us(cpu,&this_terrasilent->freq_change_time);
+		if (suspended) {
+			this_terrasilent->freq_change_time_in_idle = get_cpu_idle_time_us(
+					cpu, &this_terrasilent->freq_change_time);
 			continue;
 		}
 		ramp_dir = this_terrasilent->ramp_dir;
@@ -402,60 +404,57 @@ static void cpufreq_terrasilent_freq_change_time_work(struct work_struct *work)
 		if (old_freq != policy->cur) {
 			// frequency was changed by someone else?
 			printk(KERN_WARNING "terrasilent: frequency changed by 3rd party: %d to %d\n",
-			       old_freq,policy->cur);
+					old_freq,policy->cur);
 			new_freq = old_freq;
-		}
-		else if (ramp_dir > 0 && nr_running() > 1) {
+		} else if (ramp_dir > 0 && nr_running() > 1) {
 			// ramp up logic:
-			if (old_freq < this_terrasilent->ideal_speed)
-				new_freq = this_terrasilent->ideal_speed;
+			if (old_freq < awake_ideal_freq)
+				new_freq = awake_ideal_freq;
 			else if (ramp_up_step) {
 				new_freq = old_freq + ramp_up_step;
 				relation = CPUFREQ_RELATION_H;
-			}
-			else {
+			} else {
+				// Load heuristics: Adjust new_freq such that, assuming a linear
+				// scaling of load vs. frequency, the load in the new frequency
+				// will be max_cpu_load:
 				new_freq = policy->max;
 				relation = CPUFREQ_RELATION_H;
 			}
-			dprintk(TERRASILENT_DEBUG_ALG,"terrasilentQ @ %d ramp up: ramp_dir=%d ideal=%d\n",
-				old_freq,ramp_dir,this_terrasilent->ideal_speed);
-		}
-		else if (ramp_dir < 0) {
+			dprintk(TERRASILENT_DEBUG_ALG,
+					"terrasilentQ @ %d ramp up: ramp_dir=%d ideal=%d\n", old_freq, ramp_dir, awake_ideal_freq);
+		} else if (ramp_dir < 0) {
 			// ramp down logic:
-			if (old_freq > this_terrasilent->ideal_speed) {
-				new_freq = this_terrasilent->ideal_speed;
+			if (old_freq > awake_ideal_freq) {
+				new_freq = awake_ideal_freq;
 				relation = CPUFREQ_RELATION_H;
-			}
-			else if (ramp_down_step)
+			} else if (ramp_down_step)
 				new_freq = old_freq - ramp_down_step;
 			else {
 				// Load heuristics: Adjust new_freq such that, assuming a linear
 				// scaling of load vs. frequency, the load in the new frequency
 				// will be max_cpu_load:
-				new_freq = old_freq * this_terrasilent->cur_cpu_load / max_cpu_load;
-				if (new_freq > old_freq) // min_cpu_load > max_cpu_load ?!
-					new_freq = old_freq -1;
+				new_freq = cpufreq_terrasilent_calc_freq(cpu);
 			}
-			dprintk(TERRASILENT_DEBUG_ALG,"terrasilentQ @ %d ramp down: ramp_dir=%d ideal=%d\n",
-				old_freq,ramp_dir,this_terrasilent->ideal_speed);
-		}
-		else { // ramp_dir==0 ?! Could the timer change its mind about a queued ramp up/down
-		       // before the work task gets to run?
-		       // This may also happen if we refused to ramp up because the nr_running()==1
+			dprintk(TERRASILENT_DEBUG_ALG,
+					"terrasilentQ @ %d ramp down: ramp_dir=%d ideal=%d\n", old_freq, ramp_dir, awake_ideal_freq);
+		} else { // ramp_dir==0 ?! Could the timer change its mind about a queued ramp up/down
+				 // before the work task gets to run?
+				 // This may also happen if we refused to ramp up because the nr_running()==1
 			new_freq = old_freq;
-			dprintk(TERRASILENT_DEBUG_ALG,"terrasilentQ @ %d nothing: ramp_dir=%d nr_running=%lu\n",
-				old_freq,ramp_dir,nr_running());
+			dprintk(TERRASILENT_DEBUG_ALG,
+					"terrasilentQ @ %d nothing: ramp_dir=%d nr_running=%lu\n", old_freq, ramp_dir, nr_running());
 		}
 
 		// do actual ramp up (returns 0, if frequency change failed):
-		new_freq = target_freq(policy,this_terrasilent,new_freq,old_freq,relation);
+		new_freq = target_freq(policy, this_terrasilent, new_freq, old_freq,
+				relation);
 		if (new_freq)
-			this_terrasilent->freq_change_time_in_idle =
-				get_cpu_idle_time_us(cpu,&this_terrasilent->freq_change_time);
+			this_terrasilent->freq_change_time_in_idle = get_cpu_idle_time_us(
+					cpu, &this_terrasilent->freq_change_time);
 
 		// reset timer:
 		if (new_freq < policy->max)
-			reset_timer(cpu,this_terrasilent);
+			reset_timer(cpu, this_terrasilent);
 		// if we are maxed out, it is pointless to use the timer
 		// (idle cycles wake up the timer when the timer comes)
 		else if (timer_pending(&this_terrasilent->timer))
@@ -463,13 +462,13 @@ static void cpufreq_terrasilent_freq_change_time_work(struct work_struct *work)
 	}
 }
 
-static ssize_t show_debug_mask(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_debug_mask(struct kobject *kobj, struct attribute *attr,
+		char *buf) {
 	return sprintf(buf, "%lu\n", debug_mask);
 }
 
-static ssize_t store_debug_mask(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_debug_mask(struct kobject *kobj, struct attribute *attr,
+		const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -478,13 +477,13 @@ static ssize_t store_debug_mask(struct kobject *kobj, struct attribute *attr, co
 	return res;
 }
 
-static ssize_t show_up_rate_us(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_up_rate_us(struct kobject *kobj, struct attribute *attr,
+		char *buf) {
 	return sprintf(buf, "%lu\n", up_rate_us);
 }
 
-static ssize_t store_up_rate_us(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_up_rate_us(struct kobject *kobj, struct attribute *attr,
+		const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -493,13 +492,13 @@ static ssize_t store_up_rate_us(struct kobject *kobj, struct attribute *attr, co
 	return res;
 }
 
-static ssize_t show_down_rate_us(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_down_rate_us(struct kobject *kobj, struct attribute *attr,
+		char *buf) {
 	return sprintf(buf, "%lu\n", down_rate_us);
 }
 
-static ssize_t store_down_rate_us(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_down_rate_us(struct kobject *kobj, struct attribute *attr,
+		const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -508,31 +507,29 @@ static ssize_t store_down_rate_us(struct kobject *kobj, struct attribute *attr, 
 	return res;
 }
 
-static ssize_t show_sleep_ideal_freq(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_sleep_ideal_freq(struct kobject *kobj,
+		struct attribute *attr, char *buf) {
 	return sprintf(buf, "%u\n", sleep_ideal_freq);
 }
 
-static ssize_t store_sleep_ideal_freq(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_sleep_ideal_freq(struct kobject *kobj,
+		struct attribute *attr, const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
 	if (res >= 0 && input >= 0) {
 		sleep_ideal_freq = input;
-		if (suspended)
-			terrasilent_update_min_max_allcpus();
 	}
 	return res;
 }
 
-static ssize_t show_sleep_wakeup_freq(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_sleep_wakeup_freq(struct kobject *kobj,
+		struct attribute *attr, char *buf) {
 	return sprintf(buf, "%u\n", sleep_wakeup_freq);
 }
 
-static ssize_t store_sleep_wakeup_freq(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_sleep_wakeup_freq(struct kobject *kobj,
+		struct attribute *attr, const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -541,31 +538,29 @@ static ssize_t store_sleep_wakeup_freq(struct kobject *kobj, struct attribute *a
 	return res;
 }
 
-static ssize_t show_awake_ideal_freq(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_awake_ideal_freq(struct kobject *kobj,
+		struct attribute *attr, char *buf) {
 	return sprintf(buf, "%u\n", awake_ideal_freq);
 }
 
-static ssize_t store_awake_ideal_freq(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_awake_ideal_freq(struct kobject *kobj,
+		struct attribute *attr, const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
 	if (res >= 0 && input >= 0) {
 		awake_ideal_freq = input;
-		if (!suspended)
-			terrasilent_update_min_max_allcpus();
 	}
 	return res;
 }
 
-static ssize_t show_sample_rate_jiffies(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_sample_rate_jiffies(struct kobject *kobj,
+		struct attribute *attr, char *buf) {
 	return sprintf(buf, "%u\n", sample_rate_jiffies);
 }
 
-static ssize_t store_sample_rate_jiffies(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_sample_rate_jiffies(struct kobject *kobj,
+		struct attribute *attr, const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -574,13 +569,13 @@ static ssize_t store_sample_rate_jiffies(struct kobject *kobj, struct attribute 
 	return res;
 }
 
-static ssize_t show_ramp_up_step(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_ramp_up_step(struct kobject *kobj, struct attribute *attr,
+		char *buf) {
 	return sprintf(buf, "%u\n", ramp_up_step);
 }
 
-static ssize_t store_ramp_up_step(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_ramp_up_step(struct kobject *kobj, struct attribute *attr,
+		const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -589,13 +584,13 @@ static ssize_t store_ramp_up_step(struct kobject *kobj, struct attribute *attr, 
 	return res;
 }
 
-static ssize_t show_ramp_down_step(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_ramp_down_step(struct kobject *kobj, struct attribute *attr,
+		char *buf) {
 	return sprintf(buf, "%u\n", ramp_down_step);
 }
 
-static ssize_t store_ramp_down_step(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_ramp_down_step(struct kobject *kobj,
+		struct attribute *attr, const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -604,13 +599,13 @@ static ssize_t store_ramp_down_step(struct kobject *kobj, struct attribute *attr
 	return res;
 }
 
-static ssize_t show_max_cpu_load(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_max_cpu_load(struct kobject *kobj, struct attribute *attr,
+		char *buf) {
 	return sprintf(buf, "%lu\n", max_cpu_load);
 }
 
-static ssize_t store_max_cpu_load(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_max_cpu_load(struct kobject *kobj, struct attribute *attr,
+		const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -619,13 +614,13 @@ static ssize_t store_max_cpu_load(struct kobject *kobj, struct attribute *attr, 
 	return res;
 }
 
-static ssize_t show_min_cpu_load(struct kobject *kobj, struct attribute *attr, char *buf)
-{
+static ssize_t show_min_cpu_load(struct kobject *kobj, struct attribute *attr,
+		char *buf) {
 	return sprintf(buf, "%lu\n", min_cpu_load);
 }
 
-static ssize_t store_min_cpu_load(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count)
-{
+static ssize_t store_min_cpu_load(struct kobject *kobj, struct attribute *attr,
+		const char *buf, size_t count) {
 	ssize_t res;
 	unsigned long input;
 	res = strict_strtoul(buf, 0, &input);
@@ -650,32 +645,22 @@ define_global_rw_attr(ramp_down_step);
 define_global_rw_attr(max_cpu_load);
 define_global_rw_attr(min_cpu_load);
 
-static struct attribute * terrasilent_attributes[] = {
-	&debug_mask_attr.attr,
-	&up_rate_us_attr.attr,
-	&down_rate_us_attr.attr,
-	&sleep_ideal_freq_attr.attr,
-	&sleep_wakeup_freq_attr.attr,
-	&awake_ideal_freq_attr.attr,
-	&sample_rate_jiffies_attr.attr,
-	&ramp_up_step_attr.attr,
-	&ramp_down_step_attr.attr,
-	&max_cpu_load_attr.attr,
-	&min_cpu_load_attr.attr,
-	NULL,
-};
+static struct attribute * terrasilent_attributes[] = { &debug_mask_attr.attr,
+		&up_rate_us_attr.attr, &down_rate_us_attr.attr,
+		&sleep_ideal_freq_attr.attr, &sleep_wakeup_freq_attr.attr,
+		&awake_ideal_freq_attr.attr, &sample_rate_jiffies_attr.attr,
+		&ramp_up_step_attr.attr, &ramp_down_step_attr.attr,
+		&max_cpu_load_attr.attr, &min_cpu_load_attr.attr, NULL, };
 
-static struct attribute_group terrasilent_attr_group = {
-	.attrs = terrasilent_attributes,
-	.name = "terrasilent",
-};
+static struct attribute_group terrasilent_attr_group = { .attrs =
+		terrasilent_attributes, .name = "terrasilent", };
 
 static int cpufreq_governor_terrasilent(struct cpufreq_policy *new_policy,
-		unsigned int event)
-{
+		unsigned int event) {
 	unsigned int cpu = new_policy->cpu;
 	int rc;
-	struct terrasilent_cpu_info *this_terrasilent = &per_cpu(terrasilent_info, cpu);
+	struct terrasilent_cpu_info *this_terrasilent =
+			&per_cpu(terrasilent_info, cpu);
 
 	switch (event) {
 	case CPUFREQ_GOV_START:
@@ -686,11 +671,9 @@ static int cpufreq_governor_terrasilent(struct cpufreq_policy *new_policy,
 
 		this_terrasilent->enable = 1;
 
-		terrasilent_update_min_max(this_terrasilent,new_policy,suspended);
-
 		this_terrasilent->freq_table = cpufreq_frequency_get_table(cpu);
 		if (!this_terrasilent->freq_table)
-			printk(KERN_WARNING "terrasilent: no frequency table for cpu %d?!\n",cpu);
+		printk(KERN_WARNING "terrasilent: no frequency table for cpu %d?!\n",cpu);
 
 		smp_wmb();
 
@@ -698,7 +681,7 @@ static int cpufreq_governor_terrasilent(struct cpufreq_policy *new_policy,
 		// entries if we have already done so.
 		if (atomic_inc_return(&active_count) <= 1) {
 			rc = sysfs_create_group(cpufreq_global_kobject,
-						&terrasilent_attr_group);
+					&terrasilent_attr_group);
 			if (rc)
 				return rc;
 
@@ -706,27 +689,28 @@ static int cpufreq_governor_terrasilent(struct cpufreq_policy *new_policy,
 			pm_idle = cpufreq_idle;
 		}
 
-		if (this_terrasilent->cur_policy->cur < new_policy->max && !timer_pending(&this_terrasilent->timer))
-			reset_timer(cpu,this_terrasilent);
+		if (this_terrasilent->cur_policy->cur < new_policy->max
+				&& !timer_pending(&this_terrasilent->timer))
+			reset_timer(cpu, this_terrasilent);
 
 		break;
 
 	case CPUFREQ_GOV_LIMITS:
-		terrasilent_update_min_max(this_terrasilent,new_policy,suspended);
-
 		if (this_terrasilent->cur_policy->cur > new_policy->max) {
-			dprintk(TERRASILENT_DEBUG_JUMPS,"terrasilentI: jumping to new max freq: %d\n",new_policy->max);
+			dprintk(TERRASILENT_DEBUG_JUMPS,
+					"terrasilentI: jumping to new max freq: %d\n", new_policy->max);
 			__cpufreq_driver_target(this_terrasilent->cur_policy,
-						new_policy->max, CPUFREQ_RELATION_H);
-		}
-		else if (this_terrasilent->cur_policy->cur < new_policy->min) {
-			dprintk(TERRASILENT_DEBUG_JUMPS,"terrasilentI: jumping to new min freq: %d\n",new_policy->min);
+					new_policy->max, CPUFREQ_RELATION_H);
+		} else if (this_terrasilent->cur_policy->cur < new_policy->min) {
+			dprintk(TERRASILENT_DEBUG_JUMPS,
+					"terrasilentI: jumping to new min freq: %d\n", new_policy->min);
 			__cpufreq_driver_target(this_terrasilent->cur_policy,
-						new_policy->min, CPUFREQ_RELATION_L);
+					new_policy->min, CPUFREQ_RELATION_L);
 		}
 
-		if (this_terrasilent->cur_policy->cur < new_policy->max && !timer_pending(&this_terrasilent->timer))
-			reset_timer(cpu,this_terrasilent);
+		if (this_terrasilent->cur_policy->cur < new_policy->max
+				&& !timer_pending(&this_terrasilent->timer))
+			reset_timer(cpu, this_terrasilent);
 
 		break;
 
@@ -738,8 +722,7 @@ static int cpufreq_governor_terrasilent(struct cpufreq_policy *new_policy,
 		this_terrasilent->idle_exit_time = 0;
 
 		if (atomic_dec_return(&active_count) <= 1) {
-			sysfs_remove_group(cpufreq_global_kobject,
-					   &terrasilent_attr_group);
+			sysfs_remove_group(cpufreq_global_kobject, &terrasilent_attr_group);
 			pm_idle = pm_idle_old;
 		}
 		break;
@@ -748,50 +731,49 @@ static int cpufreq_governor_terrasilent(struct cpufreq_policy *new_policy,
 	return 0;
 }
 
-static void terrasilent_suspend(int cpu, int suspend)
-{
-	struct terrasilent_cpu_info *this_terrasilent = &per_cpu(terrasilent_info, smp_processor_id());
+static void terrasilent_suspend(int cpu, int suspend) {
+	struct terrasilent_cpu_info *this_terrasilent =
+			&per_cpu(terrasilent_info, smp_processor_id());
 	struct cpufreq_policy *policy = this_terrasilent->cur_policy;
 	unsigned int new_freq;
 
 	if (!this_terrasilent->enable)
 		return;
 
-	terrasilent_update_min_max(this_terrasilent,policy,suspend);
 	if (!suspend) { // resume at max speed:
-		new_freq = validate_freq(policy,sleep_wakeup_freq);
+		new_freq = validate_freq(policy, sleep_wakeup_freq);
 
-		dprintk(TERRASILENT_DEBUG_JUMPS,"terrasilentS: awaking at %d\n",new_freq);
+		dprintk(TERRASILENT_DEBUG_JUMPS,
+				"terrasilentS: awaking at %d\n", new_freq);
 
-		__cpufreq_driver_target(policy, new_freq,
-					CPUFREQ_RELATION_L);
+		__cpufreq_driver_target(policy, new_freq, CPUFREQ_RELATION_L);
 	} else {
 		// to avoid wakeup issues with quick sleep/wakeup don't change actual frequency when entering sleep
 		// to allow some time to settle down. Instead we just reset our statistics (and reset the timer).
 		// Eventually, the timer will adjust the frequency if necessary.
 
-		this_terrasilent->freq_change_time_in_idle =
-			get_cpu_idle_time_us(cpu,&this_terrasilent->freq_change_time);
-			
+		this_terrasilent->freq_change_time_in_idle = get_cpu_idle_time_us(cpu,
+				&this_terrasilent->freq_change_time);
+
 		//Change by Balor
 		//We set the idle frequency after checking it, and then we'll disable the timer
-		new_freq = validate_freq(policy,sleep_ideal_freq);
-		__cpufreq_driver_target(policy, new_freq,
-					CPUFREQ_RELATION_L);
+		new_freq = validate_freq(policy, sleep_ideal_freq);
+		__cpufreq_driver_target(policy, new_freq, CPUFREQ_RELATION_L);
 
-		dprintk(TERRASILENT_DEBUG_JUMPS,"terrasilentS: suspending at %d\n",policy->cur);
+		dprintk(TERRASILENT_DEBUG_JUMPS,
+				"terrasilentS: suspending at %d\n", policy->cur);
 	}
 
-	reset_timer(smp_processor_id(),this_terrasilent);
+	reset_timer(smp_processor_id(), this_terrasilent);
 }
 
 static void terrasilent_early_suspend(struct early_suspend *handler) {
 	int i;
-	if (suspended || sleep_ideal_freq==0) // disable behavior for sleep_ideal_freq==0
+	if (suspended || sleep_ideal_freq == 0) // disable behavior for sleep_ideal_freq==0
 		return;
 	suspended = 1;
 	for_each_online_cpu(i)
-		terrasilent_suspend(i,1);
+		terrasilent_suspend(i, 1);
 }
 
 static void terrasilent_late_resume(struct early_suspend *handler) {
@@ -800,14 +782,12 @@ static void terrasilent_late_resume(struct early_suspend *handler) {
 		return;
 	suspended = 0;
 	for_each_online_cpu(i)
-		terrasilent_suspend(i,0);
+		terrasilent_suspend(i, 0);
 }
 
-static struct early_suspend terrasilent_power_suspend = {
-	.suspend = terrasilent_early_suspend,
-	.resume = terrasilent_late_resume,
-	.level = EARLY_SUSPEND_LEVEL_DISABLE_FB + 1,
-};
+static struct early_suspend terrasilent_power_suspend = { .suspend =
+		terrasilent_early_suspend, .resume = terrasilent_late_resume, .level =
+		EARLY_SUSPEND_LEVEL_DISABLE_FB + 1, };
 
 static int __init cpufreq_terrasilent_init(void)
 {
@@ -831,12 +811,12 @@ static int __init cpufreq_terrasilent_init(void)
 
 	spin_lock_init(&cpumask_lock);
 
-	suspended = 0;
+suspended = 0;
 
 	/* Initalize per-cpu data: */
-	for_each_possible_cpu(i) {
+	for_each_possible_cpu(i){
 		this_terrasilent = &per_cpu(terrasilent_info, i);
-		this_terrasilent->enable = 0;
+this_terrasilent->enable = 0;
 		this_terrasilent->cur_policy = 0;
 		this_terrasilent->ramp_dir = 0;
 		this_terrasilent->time_in_idle = 0;
@@ -846,22 +826,22 @@ static int __init cpufreq_terrasilent_init(void)
 		this_terrasilent->cur_cpu_load = 0;
 		// intialize timer:
 		init_timer_deferrable(&this_terrasilent->timer);
-		this_terrasilent->timer.function = cpufreq_terrasilent_timer;
+this_terrasilent->timer.function = cpufreq_terrasilent_timer;
 		this_terrasilent->timer.data = i;
 		work_cpumask_test_and_clear(i);
 	}
 
 	// Scale up is high priority
 	up_wq = create_rt_workqueue("kterrasilent_up");
-	down_wq = create_workqueue("kterrasilent_down");
-	if (!up_wq || !down_wq)
+down_wq = create_workqueue("kterrasilent_down");
+if (!up_wq || !down_wq)
 		return -ENOMEM;
 
 	INIT_WORK(&freq_scale_work, cpufreq_terrasilent_freq_change_time_work);
 
-	register_early_suspend(&terrasilent_power_suspend);
+register_early_suspend(&terrasilent_power_suspend);
 
-	return cpufreq_register_governor(&cpufreq_gov_terrasilent);
+return cpufreq_register_governor(&cpufreq_gov_terrasilent);
 }
 
 #ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_TERRASILENT
@@ -879,6 +859,7 @@ static void __exit cpufreq_terrasilent_exit(void)
 
 module_exit(cpufreq_terrasilent_exit);
 
-MODULE_AUTHOR ("Erasmux");
-MODULE_DESCRIPTION ("'cpufreq_terrasilent' - A Silent cpufreq governor based on SmartAssV2");
-MODULE_LICENSE ("GPL");
+MODULE_AUTHOR("Balor");
+MODULE_DESCRIPTION(
+		"'cpufreq_terrasilent' - A Silent cpufreq governor based on SmartAssV2");
+MODULE_LICENSE("GPL");
