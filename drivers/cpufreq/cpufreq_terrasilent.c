@@ -95,7 +95,7 @@ static unsigned long up_rate_us;
  * The minimum amount of time to spend at a frequency before we can ramp down.
  * Notice we ignore this when we are above the ideal frequency.
  */
-#define DEFAULT_DOWN_RATE_US 30000;
+#define DEFAULT_DOWN_RATE_US 40000;
 static unsigned long down_rate_us;
 
 /*
@@ -407,16 +407,14 @@ static void cpufreq_terrasilent_freq_change_time_work(struct work_struct *work) 
 					old_freq,policy->cur);
 			new_freq = old_freq;
 		} else if (ramp_dir > 0 && nr_running() > 1) {
-			// ramp up logic:
-			if (old_freq < awake_ideal_freq)
-				new_freq = awake_ideal_freq;
-			else if (ramp_up_step) {
+			// ramp up logic:			
+			if (ramp_up_step) {
 				new_freq = old_freq + ramp_up_step;
 				relation = CPUFREQ_RELATION_H;
+			} else if (old_freq < awake_ideal_freq) {
+				new_freq = awake_ideal_freq;
 			} else {
-				// Load heuristics: Adjust new_freq such that, assuming a linear
-				// scaling of load vs. frequency, the load in the new frequency
-				// will be max_cpu_load:
+				// Putting to the max
 				new_freq = policy->max;
 				relation = CPUFREQ_RELATION_H;
 			}
