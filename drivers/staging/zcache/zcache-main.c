@@ -23,7 +23,6 @@
 #include <linux/cpu.h>
 #include <linux/highmem.h>
 #include <linux/list.h>
-#include <linux/lzo.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
@@ -41,6 +40,52 @@
 #endif
 #ifdef CONFIG_FRONTSWAP
 #include <linux/frontswap.h>
+#endif
+
+
+#if defined(CONFIG_ZCACHE_LZO)
+#include <linux/lzo.h>
+#define WMSIZE		LZO1X_MEM_COMPRESS
+#define WMSIZE_ORDER 1
+#define COMPRESS(s, sl, d, dl, wm)	\
+	lzo1x_1_compress(s, sl, d, dl, wm)
+#define DECOMPRESS(s, sl, d, dl)	\
+	lzo1x_decompress_safe(s, sl, d, dl)
+#elif defined(CONFIG_ZCACHE_SNAPPY)
+#include "../snappy/csnappy.h" /* if built in drivers/staging */
+#define WMSIZE_ORDER	((PAGE_SHIFT > 14) ? (15) : (PAGE_SHIFT+1))
+#define WMSIZE		(1 << WMSIZE_ORDER)
+static int
+snappy_compress_(
+	const unsigned char *src,
+	size_t src_len,
+	unsigned char *dst,
+	size_t *dst_len,
+	void *workmem)
+{
+	const unsigned char *end = csnappy_compress_fragment(
+		src, (uint32_t)src_len, dst, workmem, WMSIZE_ORDER);
+	*dst_len = end - dst;
+	return 0;
+}
+static int
+snappy_decompress_(
+	const unsigned char *src,
+	size_t src_len,
+	unsigned char *dst,
+	size_t *dst_len)
+{
+	uint32_t dst_len_ = (uint32_t)*dst_len;
+	int ret = csnappy_decompress_noheader(src, src_len, dst, &dst_len_);
+	*dst_len = (size_t)dst_len_;
+	return ret;
+}
+#define COMPRESS(s, sl, d, dl, wm)	\
+	snappy_compress_(s, sl, d, dl, wm)
+#define DECOMPRESS(s, sl, d, dl)	\
+	snappy_decompress_(s, sl, d, dl)
+#else
+#error either CONFIG_ZCACHE_LZO or CONFIG_ZCACHE_SNAPPY must be defined
 #endif
 
 #if 0
@@ -424,8 +469,12 @@ static int zbud_decompress(struct page *page, struct zbud_hdr *zh)
 	to_va = kmap_atomic(page, KM_USER0);
 	size = zh->size;
 	from_va = zbud_data(zh, size);
-	ret = lzo1x_decompress_safe(from_va, size, to_va, &out_len);
+	ret = DECOMPRESS(from_va, size, to_va, &out_len);
+#if defined(CONFIG_ZCACHE_LZO)
 	BUG_ON(ret != LZO_E_OK);
+#elif defined(CONFIG_ZCACHE_SNAPPY)
+	BUG_ON(ret != CSNAPPY_E_OK);
+#endif
 	BUG_ON(out_len != PAGE_SIZE);
 	kunmap_atomic(to_va, KM_USER0);
 out:
@@ -719,10 +768,14 @@ static void zv_decompress(struct page *page, struct zv_hdr *zv)
 	size = xv_get_object_size(zv) - sizeof(*zv);
 	BUG_ON(size == 0);
 	to_va = kmap_atomic(page, KM_USER0);
-	ret = lzo1x_decompress_safe((char *)zv + sizeof(*zv),
+	ret = DECOMPRESS((char *)zv + sizeof(*zv),
 					size, to_va, &clen);
 	kunmap_atomic(to_va, KM_USER0);
+#if defined(CONFIG_ZCACHE_LZO)
 	BUG_ON(ret != LZO_E_OK);
+#elif defined(CONFIG_ZCACHE_SNAPPY)
+	BUG_ON(ret != CSNAPPY_E_OK);
+#endif
 	BUG_ON(clen != PAGE_SIZE);
 }
 
@@ -1285,8 +1338,6 @@ static struct tmem_pamops zcache_pamops = {
  * zcache compression/decompression and related per-cpu stuff
  */
 
-#define LZO_WORKMEM_BYTES LZO1X_1_MEM_COMPRESS
-#define LZO_DSTMEM_PAGE_ORDER 1
 static DEFINE_PER_CPU(unsigned char *, zcache_workmem);
 static DEFINE_PER_CPU(unsigned char *, zcache_dstmem);
 
@@ -1302,8 +1353,12 @@ static int zcache_compress(struct page *from, void **out_va, size_t *out_len)
 		goto out;  /* no buffer, so can't compress */
 	from_va = kmap_atomic(from, KM_USER0);
 	mb();
-	ret = lzo1x_1_compress(from_va, PAGE_SIZE, dmem, out_len, wmem);
+	ret = COMPRESS(from_va, PAGE_SIZE, dmem, out_len, wmem);
+#if defined(CONFIG_ZCACHE_LZO)
 	BUG_ON(ret != LZO_E_OK);
+#elif defined(CONFIG_ZCACHE_SNAPPY)
+	BUG_ON(ret != CSNAPPY_E_OK);
+#endif
 	*out_va = dmem;
 	kunmap_atomic(from_va, KM_USER0);
 	ret = 1;
@@ -1322,15 +1377,15 @@ static int zcache_cpu_notifier(struct notifier_block *nb,
 	case CPU_UP_PREPARE:
 		per_cpu(zcache_dstmem, cpu) = (void *)__get_free_pages(
 			GFP_KERNEL | __GFP_REPEAT,
-			LZO_DSTMEM_PAGE_ORDER),
+			WMSIZE_ORDER),
 		per_cpu(zcache_workmem, cpu) =
-			kzalloc(LZO1X_MEM_COMPRESS,
+			kzalloc(WMSIZE,
 				GFP_KERNEL | __GFP_REPEAT);
 		break;
 	case CPU_DEAD:
 	case CPU_UP_CANCELED:
 		free_pages((unsigned long)per_cpu(zcache_dstmem, cpu),
-				LZO_DSTMEM_PAGE_ORDER);
+				WMSIZE_ORDER);
 		per_cpu(zcache_dstmem, cpu) = NULL;
 		kfree(per_cpu(zcache_workmem, cpu));
 		per_cpu(zcache_workmem, cpu) = NULL;
