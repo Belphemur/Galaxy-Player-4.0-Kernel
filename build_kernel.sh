@@ -1,8 +1,8 @@
-export CROSS_COMPILE=/home/balor/android/arm2009q3/bin/arm-none-eabi-
+CROSS_COMPILE=/home/balor/android/arm2009q3/bin/arm-none-eabi-
 INITRAMFS_DIR=G1initramfs
 INITRAMFS_ROOT_DIR=../initramfs_yp-g1
 KERNEL_NAME=TerraSilent
-KERNEL_VNUMBER=1.1
+KERNEL_VNUMBER=1.2
 
 # DO NOT MODIFY BELOW THIS LINE
 CURRENT_DIR=`pwd`
@@ -40,13 +40,13 @@ export KBUILD_BUILD_VERSION="${KERNEL_NAME}_${VERSION}-${KERNEL_VNUMBER}"
 export LOCALVERSION="-G1XXKPN-CL562447"
 
 echo "Build kernel ${KBUILD_BUILD_VERSION}${LOCALVERSION} with configuration $CONFIG"
-make ARCH=arm -j$NB_CPU
+make ARCH=arm -j$NB_CPU CROSS_COMPILE=$CROSS_COMPILE
 echo "Copy modules :"
 find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec echo {} \;
 find . -name "*.ko" ! -path "*$INITRAMFS_DIR*" -exec cp {} $INITRAMFS_DIR/lib/modules/  \;
 
 echo "Rebuild with modules"
-make ARCH=arm -j$NB_CPU
+make ARCH=arm -j$NB_CPU CROSS_COMPILE=$CROSS_COMPILE
 cp "${CURRENT_DIR}/arch/arm/boot/zImage" .
 TARFILE="${CURRENT_DIR}/${KBUILD_BUILD_VERSION}.tar"
 if [[ -e $TARFILE ]]
