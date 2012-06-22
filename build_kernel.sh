@@ -2,7 +2,7 @@ CROSS_COMPILE=/home/balor/android/arm2009q3/bin/arm-none-eabi-
 INITRAMFS_DIR=G1initramfs
 INITRAMFS_ROOT_DIR=../initramfs_yp-g1
 KERNEL_NAME=TerraSilent
-KERNEL_VNUMBER=1.3
+KERNEL_VNUMBER=1.3.5
 
 # DO NOT MODIFY BELOW THIS LINE
 CURRENT_DIR=`pwd`
